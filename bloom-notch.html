@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.spotify.com https://api.notion.com; font-src 'self'">
+<title>Bloom Notch — Top-Center Taskbar</title>
+<style>
+  /* =========================================================================
+     Bloom Notch — MacBook "Notchy"-style pill at top center (camera area)
+     Self-contained HTML/CSS/JS. Open in browser, or wrap in Electron/Tauri.
+     Features: Calendar, Spotify Connect, Notion Calendar notifications.
+     No bloat — minimal, focused, toggleable panels.
+     ========================================================================= */
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --notch-bg: #0b0b0d;
+    --notch-border: #1f1f23;
+    --accent: #6366f1;
+    --accent-glow: rgba(99, 102, 241, 0.5);
+    --accent-soft: rgba(99, 102, 241, 0.12);
+    --text: #e5e7eb;
+    --text-muted: #9ca3af;
+    --panel: #16161a;
+    --bloom-blur: 24px;
+    --notch-height: 32px;
+    --expand-height: 420px;
+    --collapsed-width: 180px;
+    --expanded-width: 440px;
+    --spotify-green: #1db954;
+    --calendar-blue: #4285f4;
+    --notion-gray: #37352f;
+  }
+
+  html, body {
+    height: 100%;
+    background: #0a0a0c;
+    color: var(--text);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    -webkit-app-region: drag;
+  }
+
+  /* =========================================================================
+     Notch shell
+     ========================================================================= */
+  #bloom-notch {
+    position: fixed;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: var(--collapsed-width);
+    height: var(--notch-height);
+    background: #000000;
+    border: none;
+    border-radius: 0 0 16px 16px;
+    backdrop-filter: none;
+    z-index: 2147483647;
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 0 16px;
+    box-shadow: none;
+    cursor: default; user-select: none; -webkit-user-select: none;
+    transition: height 0.28s cubic-bezier(0.23,1,0.32,1),
+                width 0.28s cubic-bezier(0.23,1,0.32,1),
+                border-radius 0.28s ease;
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+  }
+
+  #bloom-notch.collapsed {
+    width: var(--collapsed-width);
+    height: var(--notch-height);
+    background: #000000;
+    border: none;
+    border-radius: 0 0 14px 14px;
+    box-shadow: none;
+    backdrop-filter: none;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  #bloom-notch.collapsed .notch-dot {
+    display: none;
+  }
+
+  /* =========================================================================
+     Collapsed row: start + pinned apps + clock
+     ========================================================================= */
+  .collapsed-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+  }
+  .collapsed-row .task-row { flex: 1; overflow: hidden; }
+  .collapsed-row .clock { margin-left: auto; }
+
+  /* =========================================================================
+     Expanded layout
+     ========================================================================= */
+  .expanded-view { display: none; flex-direction: column; gap: 10px; width: 100%; height: 100%; }
+
+  #bloom-notch.expanded {
+    height: var(--expand-height);
+    width: var(--expanded-width);
+    background: var(--notch-bg);
+    border: 1px solid var(--notch-border);
+    border-radius: 20px;
+    padding: 14px 18px;
+    flex-direction: column; justify-content: flex-start; gap: 12px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.55), 0 0 48px var(--accent-glow);
+    backdrop-filter: blur(24px) saturate(160%);
+  }
+  /* Collapsed: hide all content, just black pill */
+  #bloom-notch.collapsed .collapsed-row { display: none; }
+  #bloom-notch.collapsed .expanded-view { display: none; }
+
+  /* Expanded: show expanded view */
+  #bloom-notch.expanded .collapsed-row { display: none; }
+  #bloom-notch.expanded .expanded-view { display: flex; }
+
+  /* Default (not expanded, not collapsed explicitly) */
+  #bloom-notch:not(.expanded):not(.collapsed) .collapsed-row { display: flex; }
+  #bloom-notch:not(.expanded):not(.collapsed) .expanded-view { display: none; }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex; gap: 4px; padding: 4px;
+    background: var(--panel); border-radius: 12px;
+    border: 1px solid var(--notch-border);
+  }
+  .tab-btn {
+    flex: 1; padding: 7px 6px; border: none; border-radius: 9px;
+    background: transparent; color: var(--text-muted);
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s ease; display: flex; align-items: center;
+    justify-content: center; gap: 5px;
+    -webkit-app-region: no-drag;
+  }
+  .tab-btn:hover { background: #232329; color: var(--text); }
+  .tab-btn.active { background: var(--accent-soft); color: var(--accent); }
+  .tab-btn .badge {
+    font-size: 9px; font-weight: 700; padding: 1px 5px;
+    border-radius: 999px; background: #ef4444; color: white;
+    min-width: 16px; text-align: center;
+  }
+  .tab-btn.active .badge { background: var(--accent); }
+
+  .tab-content { flex: 1; overflow-y: auto; padding-right: 2px; }
+  .tab-content::-webkit-scrollbar { width: 4px; }
+  .tab-content::-webkit-scrollbar-track { background: transparent; }
+  .tab-content::-webkit-scrollbar-thumb { background: #2a2a2e; border-radius: 2px; }
+
+  .tab-panel { display: none; flex-direction: column; gap: 8px; }
+  .tab-panel.active { display: flex; }
+
+  /* =========================================================================
+     Start button
+     ========================================================================= */
+  .start-btn {
+    width: 36px; height: 36px; border-radius: 10px;
+    border: 1px solid var(--notch-border); background: var(--panel);
+    color: var(--text); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; transition: all 0.15s ease;
+    -webkit-app-region: no-drag; flex-shrink: 0;
+  }
+  .start-btn:hover { background: #232329; border-color: var(--accent); }
+  .start-btn.active { border-color: var(--accent); background: var(--accent-soft);
+    box-shadow: 0 0 var(--bloom-blur) var(--accent-glow); }
+
+  /* =========================================================================
+     Task icons — bloom pills
+     ========================================================================= */
+  .task-row { display: flex; align-items: center; gap: 8px; overflow-x: auto; }
+  .task-row::-webkit-scrollbar { height: 4px; }
+  .task-row::-webkit-scrollbar-track { background: transparent; }
+  .task-row::-webkit-scrollbar-thumb { background: #2a2a2e; border-radius: 2px; }
+
+  .task {
+    width: 40px; height: 40px; border-radius: 10px;
+    border: 1px solid transparent; background: var(--panel);
+    color: var(--text-muted); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; position: relative; transition: all 0.18s cubic-bezier(0.2,0.8,0.2,1);
+    flex-shrink: 0; -webkit-app-region: no-drag;
+  }
+  .task:hover { border-color: var(--notch-border); background: #232329; color: var(--text);
+    transform: translateY(-2px); }
+  .task.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), 0 0 var(--bloom-blur) var(--accent-glow);
+    transform: translateY(-3px); }
+  .task .task-icon { font-size: 18px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
+  .task .task-label { font-size: 8px; font-weight: 600; letter-spacing: 0.3px; opacity: 0.7; pointer-events: none; }
+  .task.active .task-label { opacity: 1; }
+  .task .dot { position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%);
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+    opacity: 0; transition: opacity 0.18s ease; box-shadow: 0 0 8px var(--accent-glow); }
+  .task.active .dot { opacity: 1; }
+  .task .bloom { position: absolute; inset: 0; border-radius: 10px; border: 2px solid transparent;
+    opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
+  .task.active .bloom { opacity: 1; border-color: var(--accent);
+    box-shadow: 0 0 20px var(--accent-glow); animation: bloom-pulse 2.5s ease-in-out infinite; }
+  @keyframes bloom-pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.65; transform:scale(1.1); } }
+
+  /* =========================================================================
+     Clock
+     ========================================================================= */
+  .clock { text-align: right; font-size: 12px; }
+  .clock-time { font-weight: 700; letter-spacing: -0.5px; }
+  .clock-date { font-size: 9.5px; color: var(--text-muted); margin-top: 1px; }
+
+  /* =========================================================================
+     Start menu
+     ========================================================================= */
+  #start-menu {
+    position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+    width: 360px; max-height: 480px; background: var(--panel);
+    border: 1px solid var(--notch-border); border-radius: 14px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.5), 0 0 40px var(--accent-glow);
+    backdrop-filter: blur(24px); z-index: 2147483648;
+    display: none; flex-direction: column; overflow: hidden;
+    animation: menu-slide 0.18s ease-out; -webkit-app-region: no-drag;
+  }
+  @keyframes menu-slide { from { opacity:0; transform:translateX(-50%) translateY(6px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+  #start-menu.visible { display: flex; }
+  .menu-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--notch-border); }
+  .menu-avatar { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg,var(--accent),#a855f7);
+    display: flex; align-items: center; justify-content: center; font-size: 16px; color: white; }
+  .menu-user .name { font-size: 13px; font-weight: 600; }
+  .menu-user .email { font-size: 10px; color: var(--text-muted); }
+  .menu-search { padding: 10px 16px; border-bottom: 1px solid var(--notch-border); }
+  .menu-search input { width: 100%; background: var(--notch-bg); border: 1px solid var(--notch-border);
+    border-radius: 10px; color: var(--text); padding: 8px 12px; font-size: 12px; outline: none; }
+  .menu-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .menu-body { padding: 10px 16px; overflow-y: auto; max-height: 340px; }
+  .menu-section-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted);
+    margin: 12px 0 8px; font-weight: 600; }
+  .menu-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px;
+    cursor: pointer; transition: background 0.12s ease; font-size: 12.5px; }
+  .menu-item:hover { background: #232329; }
+  .menu-item .icon { width: 26px; height: 26px; border-radius: 8px; background: var(--notch-bg);
+    display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  .menu-item .label { flex: 1; }
+  .menu-footer { padding: 10px 16px; border-top: 1px solid var(--notch-border);
+    display: flex; justify-content: space-between; align-items: center; }
+  .menu-power { display: flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 10px;
+    cursor: pointer; color: var(--text-muted); font-size: 12px; font-weight: 500; }
+  .menu-power:hover { background: #232329; color: var(--text); }
+
+  /* =========================================================================
+     Tab panels — Calendar, Spotify, Notifications, Notion
+     ========================================================================= */
+  .panel { background: var(--panel); border: 1px solid var(--notch-border); border-radius: 12px;
+    padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* ---- Calendar ---- */
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .cal-title { font-size: 13px; font-weight: 700; }
+  .cal-nav { display: flex; gap: 4px; }
+  .cal-nav button { background: var(--notch-bg); border: 1px solid var(--notch-border);
+    color: var(--text); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+  .cal-nav button:hover { background: #232329; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .cal-dow { text-align: center; font-size: 9px; color: var(--text-muted); font-weight: 600; padding: 4px 0; }
+  .cal-day { text-align: center; font-size: 11px; padding: 6px 0; border-radius: 6px; cursor: pointer;
+    transition: background 0.1s ease; position: relative; }
+  .cal-day:hover { background: #232329; }
+  .cal-day.today { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  .cal-day.has-event::after { content: ''; position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
+    width: 4px; height: 4px; border-radius: 50%; background: var(--calendar-blue); }
+  .cal-events { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .cal-event { display: flex; align-items: center; gap: 8px; padding: 7px 9px;
+    background: var(--notch-bg); border-radius: 8px; border-left: 3px solid var(--calendar-blue); }
+  .cal-event .time { font-size: 10px; color: var(--text-muted); min-width: 42px; }
+  .cal-event .title { font-size: 11.5px; flex: 1; }
+  .cal-event .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--calendar-blue); }
+
+  /* ---- Spotify Connect ---- */
+  .spotify-card { display: flex; flex-direction: column; gap: 10px; }
+  .spotify-now { display: flex; align-items: center; gap: 10px; }
+  .spotify-art { width: 48px; height: 48px; border-radius: 8px; background: linear-gradient(135deg,#1db954,#191414);
+    display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+  .spotify-meta { flex: 1; min-width: 0; }
+  .spotify-title { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spotify-artist { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spotify-controls { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .spotify-btn { background: var(--notch-bg); border: 1px solid var(--notch-border); color: var(--text);
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; transition: all 0.12s ease; }
+  .spotify-btn:hover { background: #232329; border-color: var(--spotify-green); color: var(--spotify-green); }
+  .spotify-btn.play { background: var(--spotify-green); color: white; border-color: var(--spotify-green); width: 40px; height: 40px; }
+  .spotify-btn.play:hover { background: #1ed760; }
+  .spotify-progress { height: 4px; background: #2a2a2e; border-radius: 2px; overflow: hidden; }
+  .spotify-progress-bar { height: 100%; background: var(--spotify-green); width: 35%; transition: width 0.3s linear; }
+  .spotify-device { font-size: 10px; color: var(--text-muted); text-align: center; }
+  .spotify-connect { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px;
+    background: var(--notch-bg); border: 1px dashed var(--notch-border); border-radius: 8px;
+    color: var(--text-muted); font-size: 11px; cursor: pointer; }
+  .spotify-connect:hover { border-color: var(--spotify-green); color: var(--spotify-green); }
+
+  /* ---- Notifications (Notion Calendar + system) ---- */
+  .notif-list { display: flex; flex-direction: column; gap: 6px; }
+  .notif-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px;
+    background: var(--notch-bg); border-radius: 8px; border-left: 3px solid var(--notch-border);
+    transition: background 0.1s ease; }
+  .notif-item:hover { background: #1a1a1e; }
+  .notif-item.notion { border-left-color: #000; }
+  .notif-item.calendar { border-left-color: var(--calendar-blue); }
+  .notif-item.system { border-left-color: var(--accent); }
+  .notif-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+  .notif-body { flex: 1; min-width: 0; }
+  .notif-title { font-size: 11.5px; font-weight: 600; }
+  .notif-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .notif-time { font-size: 9px; color: var(--text-muted); margin-top: 3px; }
+  .notif-empty { text-align: center; color: var(--text-muted); font-size: 11px; padding: 20px 0; }
+
+  /* ---- Notion connect prompt ---- */
+  .connect-prompt { display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 16px; text-align: center; }
+  .connect-prompt .icon { font-size: 28px; }
+  .connect-prompt .text { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+  .connect-btn { background: var(--notch-bg); border: 1px solid var(--notch-border);
+    color: var(--text); padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    font-size: 11.5px; font-weight: 600; transition: all 0.12s ease; }
+  .connect-btn:hover { background: #232329; border-color: var(--accent); color: var(--accent); }
+
+  /* =========================================================================
+     Toast
+     ========================================================================= */
+  #toast { position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--notch-border); border-radius: 10px;
+    color: var(--text); padding: 7px 14px; font-size: 12.5px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45); opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease; z-index: 2147483649; white-space: nowrap; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* =========================================================================
+     Desktop hint
+     ========================================================================= */
+  #desktop { height: 100vh; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; padding-top: 90px; }
+  .desktop-hint { color: var(--text-muted); font-size: 13px; }
+  .desktop-hint b { color: var(--text); }
+  body::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+
+<div id="desktop">
+  <div style="font-size: 56px; letter-spacing: -3px;">💻</div>
+  <div class="desktop-hint">Bloom Notch — <b>Calendar</b>, <b>Spotify Connect</b>, <b>Notion Calendar</b> notifications.</div>
+  <div class="desktop-hint">Hover the pill to expand → tabs for Apps, Calendar, Spotify, Notifications.</div>
+</div>
+
+<!-- ============================ NOTCH ============================ -->
+<div id="bloom-notch" class="collapsed" role="menubar" aria-label="Bloom Notch">
+  <!-- Collapsed row -->
+  <div class="collapsed-row">
+    <button id="start-btn" class="start-btn" title="Start menu" aria-label="Start">🪟</button>
+    <div class="task-row" id="task-row"></div>
+    <div class="clock">
+      <div class="clock-time" id="clock-time">--:--</div>
+      <div class="clock-date" id="clock-date">--</div>
+    </div>
+  </div>
+
+  <!-- Expanded view -->
+  <div class="expanded-view">
+    <!-- Tabs -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="apps">📱 Apps</button>
+      <button class="tab-btn" data-tab="calendar">📅 Calendar</button>
+      <button class="tab-btn" data-tab="spotify">🎵 Spotify</button>
+      <button class="tab-btn" data-tab="notifs">🔔 <span class="badge" id="notif-badge">0</span></button>
+    </div>
+
+    <div class="tab-content">
+      <!-- Apps panel -->
+      <div class="tab-panel active" id="panel-apps">
+        <div class="task-row" id="expanded-task-row" style="flex-wrap:wrap; gap:6px;"></div>
+      </div>
+
+      <!-- Calendar panel -->
+      <div class="tab-panel" id="panel-calendar">
+        <div class="panel">
+          <div class="cal-header">
+            <div class="cal-title" id="cal-title">October 2026</div>
+            <div class="cal-nav">
+              <button id="cal-prev">‹</button>
+              <button id="cal-next">›</button>
+            </div>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+          <div class="cal-events" id="cal-events"></div>
+        </div>
+      </div>
+
+      <!-- Spotify panel -->
+      <div class="tab-panel" id="panel-spotify">
+        <div class="panel">
+          <div class="spotify-card">
+            <div class="spotify-now">
+              <div class="spotify-art">🎵</div>
+              <div class="spotify-meta">
+                <div class="spotify-title" id="sp-title">Not playing</div>
+                <div class="spotify-artist" id="sp-artist">Connect Spotify to start</div>
+              </div>
+            </div>
+            <div class="spotify-progress"><div class="spotify-progress-bar" id="sp-progress"></div></div>
+            <div class="spotify-controls">
+              <button class="spotify-btn" id="sp-prev" title="Previous">⏮</button>
+              <button class="spotify-btn play" id="sp-play" title="Play/Pause">▶</button>
+              <button class="spotify-btn" id="sp-next" title="Next">⏭</button>
+            </div>
+            <div class="spotify-device" id="sp-device">No device connected</div>
+            <div class="spotify-connect" id="sp-connect">
+              <span>🔗</span> Connect Spotify
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notifications panel -->
+      <div class="tab-panel" id="panel-notifs">
+        <div class="panel">
+          <div class="notif-list" id="notif-list"></div>
+          <div class="connect-prompt" id="notion-connect">
+            <div class="icon">📓</div>
+            <div class="text">Connect Notion Calendar to see your events and reminders here.</div>
+            <button class="connect-btn" id="notion-connect-btn">Connect Notion Calendar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="clock" style="text-align:center; margin-top:4px;">
+      <div class="clock-time" id="expanded-clock-time">--:--</div>
+      <div class="clock-date" id="expanded-clock-date">--</div>
+    </div>
+  </div>
+</div>
+
+<!-- Start menu -->
+<div id="start-menu" role="menu" aria-label="Start menu">
+  <div class="menu-header">
+    <div class="menu-avatar">👤</div>
+    <div class="menu-user">
+      <div class="name" id="menu-user-name">Bloom User</div>
+      <div class="email" id="menu-user-email">bloom@notch.local</div>
+    </div>
+  </div>
+  <div class="menu-search"><input type="text" id="menu-search" placeholder="Search apps…" autocomplete="off"></div>
+  <div class="menu-body">
+    <div class="menu-section-title">Pinned</div>
+    <div id="menu-pinned"></div>
+    <div class="menu-section-title">All apps</div>
+    <div id="menu-apps"></div>
+  </div>
+  <div class="menu-footer"><div class="menu-power" id="menu-power">⏻ Power</div></div>
+</div>
+
+<!-- Toast -->
+<div id="toast" role="alert" aria-live="polite"></div>
+
+<script>
+  /* =========================================================================
+     Bloom Notch — app logic
+     ========================================================================= */
+  const APPS = [
+    { id: 'explorer', label: 'Explorer', icon: '📁', color: '#4285f4' },
+    { id: 'browser',  label: 'Browser',  icon: '🌐', color: '#ea4335' },
+    { id: 'code',     label: 'Code',     icon: '💻', color: '#007acc' },
+    { id: 'terminal', label: 'Terminal', icon: '⬡', color: '#4fc08d' },
+    { id: 'settings', label: 'Settings', icon: '⚙️', color: '#6366f1' },
+    { id: 'gallery',  label: 'Gallery',  icon: '🖼️', color: '#a855f7' },
+    { id: 'music',    label: 'Music',    icon: '🎵', color: '#fb923c' },
+    { id: 'messages', label: 'Messages',icon: '💬', color: '#34d399' },
+  ];
+  const PINNED_IDS = ['explorer', 'browser', 'code', 'terminal'];
+
+  let activeTaskId = null;
+  let isMenuOpen = false;
+  let isExpanded = false;
+  let notionConnected = false;
+  let spotifyConnected = false;
+  let spotifyPlaying = false;
+  let calYear = new Date().getFullYear();
+  let calMonth = new Date().getMonth();
+
+  const notchEl = document.getElementById('bloom-notch');
+  const taskRow = document.getElementById('task-row');
+  const expandedTaskRow = document.getElementById('expanded-task-row');
+  const startBtn = document.getElementById('start-btn');
+  const startMenu = document.getElementById('start-menu');
+  const menuPinned = document.getElementById('menu-pinned');
+  const menuApps = document.getElementById('menu-apps');
+  const menuSearch = document.getElementById('menu-search');
+  const toastEl = document.getElementById('toast');
+  const els = {
+    time: document.getElementById('clock-time'),
+    date: document.getElementById('clock-date'),
+    etime: document.getElementById('expanded-clock-time'),
+    edate: document.getElementById('expanded-clock-date'),
+  };
+  const notifBadge = document.getElementById('notif-badge');
+  const notifList = document.getElementById('notif-list');
+  const notionConnect = document.getElementById('notion-connect');
+
+  /* ---- Notifications data ---- */
+  const NOTIFS = [
+    { id: 1, type: 'calendar', icon: '📅', title: 'Team standup', sub: 'In 15 minutes · Zoom', time: '9:45 AM' },
+    { id: 2, type: 'system', icon: '🔔', title: 'Update available', sub: 'Bloom Notch v1.1', time: 'Yesterday' },
+  ];
+
+  /* ---- Calendar events ---- */
+  const CAL_EVENTS = [
+    { time: '09:00', title: 'Team standup', day: new Date().getDate() },
+    { time: '12:30', title: 'Lunch with Alex', day: new Date().getDate() },
+    { time: '15:00', title: 'Design review', day: new Date().getDate() + 1 },
+    { time: '10:00', title: '1:1 with manager', day: new Date().getDate() + 2 },
+  ];
+
+  /* ---- Spotify mock data ---- */
+  const SPOTIFY_TRACKS = [
+    { title: 'Blinding Lights', artist: 'The Weeknd', progress: 35 },
+    { title: 'Levitating', artist: 'Dua Lipa', progress: 60 },
+    { title: 'As It Was', artist: 'Harry Styles', progress: 12 },
+  ];
+  let spTrackIdx = 0;
+
+  /* ---- HTML escape helper (XSS prevention) ---- */
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+  function buildTasks(container, pinnedOnly = false) {
+    container.innerHTML = '';
+    const ids = pinnedOnly ? PINNED_IDS : APPS.map(a => a.id);
+    ids.forEach(id => {
+      const app = APPS.find(a => a.id === id);
+      const task = document.createElement('div');
+      task.className = 'task' + (activeTaskId === id ? ' active' : '');
+      task.id = 'task-' + id + (pinnedOnly ? '-pinned' : '-expanded');
+      task.setAttribute('role', 'button');
+      task.setAttribute('aria-pressed', activeTaskId === id ? 'true' : 'false');
+      task.setAttribute('aria-label', app.label);
+      task.title = app.label;
+      task.innerHTML = `
+        <div class="task-icon">${app.icon}</div>
+        <div class="task-label">${app.label}</div>
+        <div class="dot"></div>
+        <div class="bloom"></div>
+      `;
+      task.addEventListener('click', (e) => { e.stopPropagation(); activateTask(id); });
+      container.appendChild(task);
+    });
+  }
+  function refreshTasks() {
+    buildTasks(taskRow, true);
+    buildTasks(expandedTaskRow, false);
+  }
+  function activateTask(id) {
+    const app = APPS.find(a => a.id === id);
+    if (!app) return;
+    activeTaskId = id;
+    refreshTasks();
+    showToast('Opened ' + app.label);
+    if (isMenuOpen) closeMenu();
+  }
+
+  /* =========================================================================
+     Notch expand/collapse
+     ========================================================================= */
+  function expandNotch() {
+    notchEl.classList.add('expanded');
+    notchEl.classList.remove('collapsed');
+    isExpanded = true;
+    if (window.electronAPI) window.electronAPI.resizeNotch(440, 420);
+  }
+  function collapseNotch() {
+    if (isMenuOpen) return;
+    notchEl.classList.remove('expanded');
+    notchEl.classList.add('collapsed');
+    isExpanded = false;
+    if (window.electronAPI) window.electronAPI.resizeNotch(180, 32);
+  }
+
+  notchEl.addEventListener('mouseenter', expandNotch);
+  notchEl.addEventListener('mouseleave', collapseNotch);
+
+  startBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    expandNotch();
+    toggleMenu();
+  });
+
+  /* =========================================================================
+     Start menu
+     ========================================================================= */
+  function toggleMenu() {
+    isMenuOpen = !isMenuOpen;
+    startMenu.classList.toggle('visible', isMenuOpen);
+    startBtn.classList.toggle('active', isMenuOpen);
+    if (isMenuOpen) { menuSearch.focus(); renderMenu(); }
+  }
+  function closeMenu() {
+    isMenuOpen = false;
+    startMenu.classList.remove('visible');
+    startBtn.classList.remove('active');
+  }
+  document.addEventListener('click', (e) => {
+    if (isMenuOpen && !startMenu.contains(e.target) && e.target !== startBtn) {
+      closeMenu();
+      if (!notchEl.matches(':hover')) collapseNotch();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isMenuOpen) closeMenu();
+  });
+
+  function renderMenu(filter = '') {
+    const term = filter.toLowerCase();
+    menuPinned.innerHTML = '';
+    PINNED_IDS.forEach(id => {
+      const app = APPS.find(a => a.id === id);
+      if (app.label.toLowerCase().includes(term)) menuPinned.appendChild(menuItemEl(app));
+    });
+    menuApps.innerHTML = '';
+    APPS.forEach(app => {
+      if (PINNED_IDS.includes(app.id)) return;
+      if (app.label.toLowerCase().includes(term)) menuApps.appendChild(menuItemEl(app));
+    });
+  }
+  function menuItemEl(app) {
+    const el = document.createElement('div');
+    el.className = 'menu-item';
+    el.innerHTML = `<div class="icon" style="color:${app.color}">${app.icon}</div><div class="label">${app.label}</div>`;
+    el.addEventListener('click', (e) => { e.stopPropagation(); activateTask(app.id); closeMenu(); });
+    return el;
+  }
+  menuSearch.addEventListener('input', (e) => renderMenu(e.target.value));
+
+  /* =========================================================================
+     Tabs
+     ========================================================================= */
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('panel-' + tab).classList.add('active');
+    });
+  });
+
+  /* =========================================================================
+     Calendar
+     ========================================================================= */
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const DOWS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+  function renderCalendar() {
+    const title = document.getElementById('cal-title');
+    title.textContent = MONTHS[calMonth] + ' ' + calYear;
+    const grid = document.getElementById('cal-grid');
+    grid.innerHTML = '';
+    DOWS.forEach(d => {
+      const el = document.createElement('div');
+      el.className = 'cal-dow';
+      el.textContent = d;
+      grid.appendChild(el);
+    });
+    const firstDay = new Date(calYear, calMonth, 1).getDay();
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    const today = new Date();
+    for (let i = 0; i < firstDay; i++) {
+      const el = document.createElement('div');
+      el.className = 'cal-day';
+      grid.appendChild(el);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const el = document.createElement('div');
+      el.className = 'cal-day';
+      if (today.getFullYear() === calYear && today.getMonth() === calMonth && today.getDate() === d) {
+        el.classList.add('today');
+      }
+      if (CAL_EVENTS.some(e => e.day === d)) el.classList.add('has-event');
+      el.textContent = d;
+      grid.appendChild(el);
+    }
+    // Events for today
+    const eventsEl = document.getElementById('cal-events');
+    eventsEl.innerHTML = '';
+    CAL_EVENTS.filter(e => e.day === new Date().getDate()).forEach(ev => {
+      const el = document.createElement('div');
+      el.className = 'cal-event';
+      el.innerHTML = `<div class="time">${escapeHtml(ev.time)}</div><div class="title">${escapeHtml(ev.title)}</div><div class="dot"></div>`;
+      eventsEl.appendChild(el);
+    });
+  }
+  document.getElementById('cal-prev').addEventListener('click', (e) => {
+    e.stopPropagation();
+    calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; }
+    renderCalendar();
+  });
+  document.getElementById('cal-next').addEventListener('click', (e) => {
+    e.stopPropagation();
+    calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; }
+    renderCalendar();
+  });
+  renderCalendar();
+
+  /* =========================================================================
+     Spotify Connect (UI-ready; wire to Spotify Web API for real control)
+     ========================================================================= */
+  function renderSpotify() {
+    const track = SPOTIFY_TRACKS[spTrackIdx];
+    document.getElementById('sp-title').textContent = track.title;
+    document.getElementById('sp-artist').textContent = track.artist;
+    document.getElementById('sp-progress').style.width = track.progress + '%';
+    document.getElementById('sp-device').textContent = spotifyConnected ? 'Connected · Bloom Notch' : 'No device connected';
+    document.getElementById('sp-play').textContent = spotifyPlaying ? '⏸' : '▶';
+    document.getElementById('sp-connect').style.display = spotifyConnected ? 'none' : 'flex';
+  }
+  document.getElementById('sp-play').addEventListener('click', (e) => {
+    e.stopPropagation();
+    spotifyPlaying = !spotifyPlaying;
+    renderSpotify();
+    showToast(spotifyPlaying ? 'Playing' : 'Paused');
+  });
+  document.getElementById('sp-prev').addEventListener('click', (e) => {
+    e.stopPropagation();
+    spTrackIdx = (spTrackIdx - 1 + SPOTIFY_TRACKS.length) % SPOTIFY_TRACKS.length;
+    renderSpotify();
+  });
+  document.getElementById('sp-next').addEventListener('click', (e) => {
+    e.stopPropagation();
+    spTrackIdx = (spTrackIdx + 1) % SPOTIFY_TRACKS.length;
+    renderSpotify();
+  });
+  document.getElementById('sp-connect').addEventListener('click', (e) => {
+    e.stopPropagation();
+    spotifyConnected = true;
+    spotifyPlaying = true;
+    renderSpotify();
+    showToast('Spotify connected');
+  });
+  renderSpotify();
+
+  /* =========================================================================
+     Notifications (Notion Calendar + system)
+     ========================================================================= */
+  function renderNotifs() {
+    notifList.innerHTML = '';
+    if (NOTIFS.length === 0) {
+      notifList.innerHTML = '<div class="notif-empty">No notifications</div>';
+      return;
+    }
+    NOTIFS.forEach(n => {
+      const el = document.createElement('div');
+      el.className = 'notif-item ' + n.type;
+      el.innerHTML = `
+        <div class="notif-icon">${escapeHtml(n.icon)}</div>
+        <div class="notif-body">
+          <div class="notif-title">${escapeHtml(n.title)}</div>
+          <div class="notif-sub">${escapeHtml(n.sub)}</div>
+          <div class="notif-time">${escapeHtml(n.time)}</div>
+        </div>
+      `;
+      notifList.appendChild(el);
+    });
+    notifBadge.textContent = NOTIFS.length;
+  }
+  renderNotifs();
+
+  /* ---- Notion Calendar connect ---- */
+  document.getElementById('notion-connect-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    notionConnected = true;
+    // Simulate fetching Notion calendar events
+    NOTIFS.push({ id: 3, type: 'notion', icon: '📓', title: 'Notion: Project sync', sub: 'New page added to workspace', time: 'Just now' });
+    notionConnect.style.display = 'none';
+    renderNotifs();
+    showToast('Notion Calendar connected');
+  });
+
+  /* =========================================================================
+     Toast
+     ========================================================================= */
+  function showToast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    setTimeout(() => toastEl.classList.remove('show'), 2000);
+  }
+
+  /* =========================================================================
+     Clock
+     ========================================================================= */
+  function updateClock() {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    els.time.textContent = timeStr;
+    els.date.textContent = dateStr;
+    els.etime.textContent = timeStr;
+    els.edate.textContent = dateStr;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  /* =========================================================================
+     Start menu
+     ========================================================================= */
+  document.getElementById('menu-user-name').textContent = 'Bloom User';
+  document.getElementById('menu-user-email').textContent = 'bloom@notch.local';
+  document.getElementById('menu-power').addEventListener('click', (e) => {
+    e.stopPropagation(); closeMenu(); showToast('Power menu soon');
+  });
+
+  /* =========================================================================
+     Init
+     ========================================================================= */
+  refreshTasks();
+
+  // Demo bloom after 1.5s
+  setTimeout(() => activateTask('code'), 1500);
+</script>
+</body>
+</html>

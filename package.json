@@ -1,0 +1,26 @@
+{
+  "name": "bloom-notch",
+  "productName": "Bloom Notch",
+  "version": "1.0.0",
+  "description": "MacBook Notchy-style bloom taskbar that lives at the top center (camera/notch area)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "notch",
+    "taskbar",
+    "bloom",
+    "desktop",
+    "macbook"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
